@@ -22,7 +22,7 @@ def _run_command(args: list[str]) -> tuple[int, str, str]:
 
 def _package_versions() -> JsonDict:
     output: JsonDict = {}
-    for name in ("numpy", "pytest", "mlx", "mlx-lm", "huggingface_hub", "zstandard"):
+    for name in ("numpy", "pytest", "mlx", "mlx-lm", "huggingface_hub", "zstandard", "datasets", "pyarrow"):
         try:
             output[name] = importlib.metadata.version(name)
         except importlib.metadata.PackageNotFoundError:
