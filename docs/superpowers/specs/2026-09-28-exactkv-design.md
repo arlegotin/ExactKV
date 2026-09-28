@@ -36,7 +36,7 @@ The repository is named `ExactKV`; `exact-kv-refinement-poc` is only the descrip
 - Verification: deterministic greedy, non-thinking template, initial draft horizon 4; development ablations only at 2, 4, 8.
 - Staging: one layer of exact K/V, with at most one additional layer-sized assembly buffer, measured and charged.
 - Implementation order: CPU reference and evidence gates before any custom Metal reconstruction.
-- Excluded: stochastic sampling, batching, eviction, networking, offload memory claims, persistent sessions, prefix sharing, tensor parallelism, sliding windows, training, GPU variable-output packing, rANS, dynamic allocation, custom attention.
+- Excluded: stochastic sampling, batching, eviction, networking, offload memory claims, persistent sessions, prefix sharing, tensor parallelism, sliding windows, training, GPU variable-output packing, rANS, a dynamic allocator, custom attention.
 - No CUDA, PyTorch, distributed serving framework, Docker, or experiment-tracking service dependency.
 
 Planning observations (not a `doctor` result): macOS 26.6.2 build 25G83, arm64, Apple M3 Max, `hw.memsize=38654705664` (36 GiB). `/opt/homebrew/bin/python3.12` is ARM-native Python 3.12.9; the default `python3` is 3.14.6. The 3.12 interpreter has NumPy 2.3.1 but no installed MLX, MLX-LM, pytest, huggingface_hub, or zstandard distributions. The repository volume reported about 23 GiB available. Recheck all observations at execution; they do not establish GPU compatibility or available application memory.
@@ -80,7 +80,7 @@ CPU codec modules must import without MLX. CLI help, parser tests, and reports m
 
 ## 4. Gated research contract
 
-Every gate writes a durable decision with input artifact hashes, code/environment identity, evidence, conclusion, one optional repair, and allowed next work. Statuses are `pass`, `narrow`, `stop`, `blocked`; an unavailable paper alone does not stop a provisional experiment. A narrowing decision explicitly names which downstream work remains justified. Missing evidence never counts as a pass.
+Every gate writes a durable decision with input artifact hashes, code/environment identity, evidence, conclusion, one optional repair, and allowed next work. Statuses are `pass`, `narrow`, `stop`, `blocked`; an unavailable paper alone does not stop a provisional experiment. A narrowing decision explicitly names which downstream work remains justified. Missing evidence never counts as a pass. Record the producing commit for provenance and relevant implementation/input hashes for validity: unrelated later commits do not invalidate every previous gate, but changed numerical code, format, ABI, model, or other gate dependencies require affected checks to rerun.
 
 | Gate | Smallest work and evidence | Condition for dependent work |
 |---|---|---|
