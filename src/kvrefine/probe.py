@@ -1,8 +1,9 @@
-"""G1 all-layer diagnostic probe and fully counted serialized-size comparison."""
+"""G1 all-layer diagnostic probe and serialized-size comparison."""
 
 from __future__ import annotations
 
 import json
+import hashlib
 from collections import Counter
 from pathlib import Path
 from typing import Iterable
@@ -19,7 +20,7 @@ from .baselines import (
 )
 from .codec import _bounds, decode_page, encode_page
 from .data import load_prompts
-from .format import PAGE_HEADER
+from .format import PAGE_HEADER, container_nbytes
 from .metrics import cache_projection, kv_payload_bytes, tail_reservation
 from .model import capture_prompt, load_model
 from .native import NativePage, bf16_words, quantize_kv
@@ -97,7 +98,7 @@ _BYTE_FIELDS = (
 )
 
 
-def aggregate_pages(pages: Iterable[JsonDict]) -> JsonDict:
+def aggregate_pages(pages: Iterable[JsonDict], *, source_identity: JsonDict | None = None) -> JsonDict:
     totals = {key: 0 for key in _BYTE_FIELDS}
     roles = {role: {"pages": 0, "raw_bytes": 0, "shared_bytes": 0} for role in ("K", "V")}
     layers: dict[str, JsonDict] = {}
@@ -105,8 +106,22 @@ def aggregate_pages(pages: Iterable[JsonDict]) -> JsonDict:
     modes: Counter[int] = Counter()
     widths: Counter[int] = Counter()
     page_count = value_count = 0
+    page_lengths: list[int] = []
+    descriptors: list[JsonDict] = []
+    descriptor_by_stream: dict[str, JsonDict] = {}
+    native_hash = hashlib.sha256()
+    native_abi_id: str | None = None
     for item in pages:
+        side: NativePage = item["side"]
+        if native_abi_id is None:
+            native_abi_id = side.abi_id
+        elif native_abi_id != side.abi_id:
+            raise ProbeError("native ABI changed within one prompt")
         measured = measure_page(**item)
+        page_lengths.append(measured["refinement_bytes"])
+        native_hash.update(side.q.tobytes())
+        native_hash.update(side.scales.tobytes())
+        native_hash.update(side.biases.tobytes())
         page_count += 1
         value_count += measured["values"]
         for key in _BYTE_FIELDS:
@@ -121,12 +136,45 @@ def aggregate_pages(pages: Iterable[JsonDict]) -> JsonDict:
         layer_stats["raw_bytes"] += measured["raw_bytes"]
         layer_stats["shared_bytes"] += measured["shared_bytes"]
         stream_id = f"{layer}:{role}:{measured['head']}"
+        descriptor = descriptor_by_stream.get(stream_id)
+        if descriptor is None:
+            if item["page_id"] != 0:
+                raise ProbeError("first page of a tensor must have page ID zero")
+            descriptor = {"layer": measured["layer"], "role": role, "head": measured["head"], "first_page": page_count - 1, "page_count": 0}
+            descriptor_by_stream[stream_id] = descriptor
+            descriptors.append(descriptor)
+        if descriptor["first_page"] + descriptor["page_count"] != page_count - 1 or item["page_id"] != descriptor["page_count"]:
+            raise ProbeError("tensor pages must be contiguous and ordered")
+        descriptor["page_count"] += 1
         stream = streams.setdefault(stream_id, {"pages": 0, "raw_bytes": 0, "shared_bytes": 0})
         stream["pages"] += 1
         stream["raw_bytes"] += measured["raw_bytes"]
         stream["shared_bytes"] += measured["shared_bytes"]
         modes.update({int(mode): count for mode, count in measured["mode_counts"].items()})
         widths.update({int(width): count for width, count in measured["rank_width_counts"].items()})
+    if page_count:
+        identity = dict(source_identity or {})
+        if any(key in identity for key in ("page_offsets", "streams", "native_abi_id", "native_side_sha256")):
+            raise ProbeError("source identity conflicts with container fields")
+        container_manifest = {
+            **identity,
+            "codec": "interval-rank-v1",
+            "native_abi_id": native_abi_id,
+            "native_side_sha256": native_hash.hexdigest(),
+            "source_q_page_version": 1,
+            "q_bits": 4,
+            "group_size": 64,
+            "scale_bias_dtype": "bf16",
+            "streams": descriptors,
+        }
+        container_bytes = container_nbytes(container_manifest, page_lengths) - sum(page_lengths)
+    else:
+        container_bytes = 0
+    totals["refinement_page_bytes"] = totals["refinement_bytes"]
+    totals["container_metadata_bytes"] = container_bytes
+    totals["refinement_bytes"] += container_bytes
+    totals["metadata_bytes"] += container_bytes
+    totals["shared_bytes"] += container_bytes
     return {
         "pages": page_count,
         "streams": len(streams),
@@ -203,7 +251,10 @@ def run_probe(manifest: Path, tokens: int) -> JsonDict:
     for prompt in prompts:
         print(f"probe {prompt['prompt_id']}: start", flush=True)
         allocation: JsonDict = {}
-        summary = aggregate_pages(_real_pages(handle, prompt, allocation))
+        summary = aggregate_pages(
+            _real_pages(handle, prompt, allocation),
+            source_identity={"model_revision": lock["revision"], "prompt_sha256": prompt["token_sha256"], "prompt_tokens": tokens},
+        )
         expected_raw = kv_payload_bytes(tokens)
         if summary["streams"] != 28 * 8 * 2 or summary["totals"]["raw_bytes"] != expected_raw:
             raise ProbeError(f"all-layer capture incomplete for {prompt['prompt_id']}")
@@ -215,10 +266,18 @@ def run_probe(manifest: Path, tokens: int) -> JsonDict:
         projections = {
             "shared_one_stage": cache_projection({"q_codes": totals["q_bytes"], "scales_biases": totals["scales_biases_bytes"], "refinement": totals["refinement_payload_bytes"], "metadata": totals["metadata_bytes"]}, layer_bytes, shared_tail, 1),
             "shared_two_stage": cache_projection({"q_codes": totals["q_bytes"], "scales_biases": totals["scales_biases_bytes"], "refinement": totals["refinement_payload_bytes"], "metadata": totals["metadata_bytes"]}, layer_bytes, shared_tail, 2),
-            "palette_dual_two_stage": cache_projection({"q_codes": totals["q_bytes"], "scales_biases": totals["scales_biases_bytes"], "independent_exact": totals["palette_bytes"]}, layer_bytes, shared_tail, 2),
-            "zstd_dual_two_stage": cache_projection({"q_codes": totals["q_bytes"], "scales_biases": totals["scales_biases_bytes"], "independent_exact": totals["field_zstd_bytes"]}, layer_bytes, shared_tail, 2),
-            "palette_exact_only_two_stage": cache_projection({"independent_exact": totals["palette_bytes"]}, layer_bytes, raw_tail, 2),
             "raw_exact": cache_projection({"raw_bf16": expected_raw}, 0, raw_tail, 0),
         }
+        for name, exact_bytes, native_view in (
+            ("palette_dual", totals["palette_bytes"], True),
+            ("zstd_dual", totals["field_zstd_bytes"], True),
+            ("palette_exact_only", totals["palette_bytes"], False),
+            ("zstd_exact_only", totals["field_zstd_bytes"], False),
+        ):
+            components = {"independent_exact": exact_bytes}
+            if native_view:
+                components.update({"q_codes": totals["q_bytes"], "scales_biases": totals["scales_biases_bytes"]})
+            for label, count in (("one_stage", 1), ("two_stage", 2)):
+                projections[f"{name}_{label}"] = cache_projection(components, layer_bytes, shared_tail if native_view else raw_tail, count)
         results.append({"prompt_id": prompt["prompt_id"], "prompt_sha256": prompt["token_sha256"], "tokens": tokens, "summary": summary, "allocation": allocation, "tail_reservation": reservation, "projections": projections})
     return {"schema_version": 1, "kind": "g1-probe", "model_revision": lock["revision"], "diagnostic_full_raw_cache": True, "prompts": results}

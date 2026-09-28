@@ -38,6 +38,19 @@ def _canonical(value: Any) -> bytes:
     return json.dumps(value, sort_keys=True, separators=(",", ":"), allow_nan=False).encode()
 
 
+def container_nbytes(manifest: dict[str, Any], page_lengths: list[int]) -> int:
+    """Return the exact EKVT extent without retaining its page payloads."""
+    if "page_offsets" in manifest:
+        raise FormatError("caller must not supply page offsets")
+    offsets = [0]
+    for length in page_lengths:
+        if not isinstance(length, int) or length < PAGE_HEADER.size or length % 4:
+            raise FormatError("container page lengths must be aligned and hold a page header")
+        offsets.append(offsets[-1] + length)
+    manifest_bytes = _canonical({**manifest, "page_offsets": offsets})
+    return _round_up(CONTAINER_HEADER.size + len(manifest_bytes), 8) + offsets[-1]
+
+
 def pack_container(manifest: dict[str, Any], pages: list[bytes]) -> bytes:
     if "page_offsets" in manifest:
         raise FormatError("caller must not supply page offsets")

@@ -46,6 +46,17 @@ def test_probe_counts_native_side_information_and_page_overhead():
     assert measured["independent_dual_palette_bytes"] == 32 + 4 + measured["palette_bytes"]
 
 
+def test_probe_charges_tensor_container_and_offsets():
+    from kvrefine.probe import aggregate_pages
+
+    result = aggregate_pages([_page(0, "K", 0)], source_identity={"model_revision": "a" * 40, "prompt_sha256": "b" * 64})
+    totals = result["totals"]
+    assert totals["container_metadata_bytes"] > 16
+    assert totals["refinement_bytes"] == totals["refinement_page_bytes"] + totals["container_metadata_bytes"]
+    assert totals["shared_bytes"] == totals["q_bytes"] + totals["scales_biases_bytes"] + totals["refinement_bytes"]
+    assert result["roles"]["K"]["shared_bytes"] < totals["shared_bytes"]
+
+
 def test_probe_aggregation_does_not_keep_source_arrays():
     from kvrefine.probe import aggregate_pages
 

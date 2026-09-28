@@ -13,11 +13,12 @@ def test_page_size_estimator_includes_header_mode_offsets_and_guard():
 
 
 def test_container_round_trip_and_identity():
-    from kvrefine.format import FormatError, pack_container, unpack_container
+    from kvrefine.format import FormatError, container_nbytes, pack_container, unpack_container
 
     manifest = {"model_revision": "a" * 40, "abi_id": "test", "tensors": [{"role": "K", "head": 0}]}
     pages = [b"EKVR" + b"\x00" * 44, b"EKVR" + b"\x01" * 44]
     blob = pack_container(manifest, pages)
+    assert container_nbytes(manifest, [len(page) for page in pages]) == len(blob)
     recovered, views = unpack_container(blob)
     assert recovered["model_revision"] == manifest["model_revision"]
     assert recovered["page_offsets"] == [0, 48, 96]
