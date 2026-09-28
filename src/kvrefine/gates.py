@@ -62,7 +62,7 @@ def write_decision(
     return write_record(out, record)
 
 
-def require_gate(name: str, decisions_dir: Path) -> JsonDict:
+def read_decision(name: str, decisions_dir: Path) -> JsonDict:
     path = decisions_dir / f"{name}.json"
     if not path.is_file():
         raise GateError(f"missing gate decision: {path}")
@@ -77,6 +77,11 @@ def require_gate(name: str, decisions_dir: Path) -> JsonDict:
         evidence_path = path.parent / item["path"]
         if not evidence_path.is_file() or _sha256(evidence_path) != item["sha256"]:
             raise GateError(f"gate evidence missing or changed: {evidence_path}")
+    return record
+
+
+def require_gate(name: str, decisions_dir: Path) -> JsonDict:
+    record = read_decision(name, decisions_dir)
     if record["status"] not in {"pass", "narrow"}:
         raise GateError(f"gate {name} is {record['status']}: {record['reason']}")
     return record

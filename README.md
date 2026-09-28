@@ -7,6 +7,7 @@ The specification and implementation plan were executed through the G1 size gate
 - [Design specification](docs/superpowers/specs/2026-09-28-exactkv-design.md): codec, page format, ownership, verification, baselines, gates, and completion criteria.
 - [Implementation plan](docs/superpowers/plans/2026-09-28-exactkv.md): 18 tasks with interfaces, tests, evidence requirements, and meaningful commits.
 - [Source audit notes](docs/research/2026-09-28-source-audit.md): checked implementation sources, supplied prior-art map, and unresolved overlap risks.
+- [Findings report](results/report.md): measured G1 sizes, projected working bytes, exactness scope, and the early no-go.
 
 Run the current small suite in an ARM-native Python 3.12 environment:
 

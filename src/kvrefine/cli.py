@@ -25,6 +25,9 @@ def main(argv: list[str] | None = None) -> int:
     probe.add_argument("--manifest", type=Path, required=True)
     probe.add_argument("--tokens", type=int, required=True)
     probe.add_argument("--out", type=Path, required=True)
+    report = subcommands.add_parser("report", help="Render an evidence-checked findings report")
+    report.add_argument("--results", type=Path, required=True)
+    report.add_argument("--out", type=Path, required=True)
     try:
         args = parser.parse_args(argv)
     except SystemExit as exc:
@@ -56,6 +59,12 @@ def main(argv: list[str] | None = None) -> int:
             raise
         write_record(out, result)
         print(json.dumps({"out": str(out), "prompts": len(result["prompts"]), "tokens": args.tokens}))
+        return 0
+    if args.command == "report":
+        from .report import build_report
+
+        summary = build_report(args.results, args.out)
+        print(json.dumps({"out": str(args.out), "conclusion": summary["conclusion"], "exact_cpu_pages": summary["exact_cpu_pages"]}))
         return 0
     return 2
 
