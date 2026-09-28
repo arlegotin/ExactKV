@@ -1,0 +1,32 @@
+[build-system]
+requires = ["setuptools>=70", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "exact-kv-refinement-poc"
+version = "0.1.0"
+description = "A gated experiment in exact refinement of native quantized KV cache"
+readme = "README.md"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "numpy>=2.0",
+    "mlx",
+    "mlx-lm",
+    "huggingface_hub",
+    "zstandard",
+]
+
+[project.optional-dependencies]
+test = ["pytest>=8"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+    "metal: needs a working Metal GPU",
+    "model: needs the pinned model snapshot",
+    "slow: long-context or repeated benchmark",
+]
+addopts = "-m 'not metal and not model and not slow'"
