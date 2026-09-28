@@ -37,3 +37,13 @@ def test_gate_evidence_survives_repository_relocation(tmp_path):
     moved = tmp_path / "moved"
     shutil.move(str(original), str(moved))
     assert require_gate("G0", moved / "results" / "decisions")["status"] == "pass"
+
+
+def test_stopped_gate_cannot_authorize_later_work(tmp_path):
+    from kvrefine.gates import GateError, require_gate, write_decision
+
+    evidence = tmp_path / "size.json"
+    evidence.write_text('{"no_go":true}\n')
+    write_decision("G1", "stop", [evidence], "shared cache exceeds raw peak", ["report"], tmp_path / "G1.json")
+    with pytest.raises(GateError, match="is stop"):
+        require_gate("G1", tmp_path)
