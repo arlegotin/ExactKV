@@ -18,6 +18,12 @@ This is the planning provenance ledger. The research map below is supplied by th
 
 These checks used mutable main/docs URLs; they are navigation evidence, not runtime pins. No model weights were downloaded, MLX installed, or inference run during planning.
 
+## Execution addendum: installed native ABI check
+
+G0 Task 2 used MLX 0.32.2 and MLX-LM 0.31.3 on the M3 Max. `doctor --smoke` ran stock BF16 and native Q4 attention for one GQA step and saved the installed source hashes in `results/environment.json`. The installed `QuantizedKVCache` stores uint32 Q4 words, BF16 scale/bias arrays, and grows in 256-token blocks. Its affine fixture from source values 0–15 stored scale `-1` and bias `15`: the first packed word is `0x89ABCDEF` for increasing values, and native dequantization returns the original fixture. This is compatible with the specification's explicit negative-scale path; the initial positive-scale test expectation was wrong. The fixture is checked by `tests/test_native.py` and recorded in `results/evidence/G0/native_abi.json`.
+
+Metal is available in an unsandboxed process; the restricted execution sandbox itself hides the device. GPU-dependent tests and the smoke were run with Metal access. This is an environment observation, not a measured codec or inference result. G0 remains open until the pinned model and focused prior-art audit complete.
+
 ## Required focused audit
 
 Read PackKV, QuantSpec, Lynx and VeriCache mechanism/evaluation sections, inspect current FAFO, and make one focused retrieval attempt for full Vayne and ProofKV papers or official code. Search titles individually when results are noisy. Record exact version/revision and evidence location for each answer to:

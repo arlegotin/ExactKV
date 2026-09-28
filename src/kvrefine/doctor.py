@@ -74,8 +74,15 @@ def collect_environment(*, smoke: bool) -> JsonDict:
         unavailable["disk_free_bytes"] = str(exc)
     result["smoke_requested"] = smoke
     result["smoke"] = None
+    result["native_abi"] = None
     if smoke:
-        unavailable["smoke"] = "BF16/native attention smoke is introduced at G0 Task 2"
+        try:
+            result["smoke"] = _attention_smoke()
+            from .native import native_abi
+
+            result["native_abi"] = native_abi()
+        except (ImportError, OSError, RuntimeError, ValueError) as exc:
+            unavailable["smoke"] = str(exc)
     critical: list[str] = []
     if result["architecture"] != "arm64":
         critical.append("Python is not running on arm64")
@@ -92,3 +99,26 @@ def collect_environment(*, smoke: bool) -> JsonDict:
         critical.append("requested attention smoke has not run")
     result["critical_issues"] = critical
     return result
+
+
+def _attention_smoke() -> JsonDict:
+    import numpy as np
+    import mlx.core as mx
+    from mlx_lm.models.base import scaled_dot_product_attention
+    from mlx_lm.models.cache import QuantizedKVCache
+
+    queries = mx.ones((1, 16, 1, 128), dtype=mx.bfloat16)
+    keys = mx.ones((1, 8, 1, 128), dtype=mx.bfloat16)
+    values = mx.array(np.arange(1024, dtype=np.float32).reshape(1, 8, 1, 128) / 1024, dtype=mx.bfloat16)
+    raw = scaled_dot_product_attention(queries, keys, values, cache=None, scale=128 ** -0.5, mask=None)
+    cache = QuantizedKVCache(group_size=64, bits=4)
+    q_keys, q_values = cache.update_and_fetch(keys, values)
+    approximate = scaled_dot_product_attention(
+        queries, q_keys, q_values, cache=cache, scale=128 ** -0.5, mask=None
+    )
+    mx.eval(raw, approximate)
+    if not np.isfinite(np.array(raw.astype(mx.float32))).all():
+        raise RuntimeError("BF16 attention smoke produced nonfinite output")
+    if not np.isfinite(np.array(approximate.astype(mx.float32))).all():
+        raise RuntimeError("Q4 attention smoke produced nonfinite output")
+    return {"bf16_shape": list(raw.shape), "q4_shape": list(approximate.shape), "native_capacity": cache.keys[0].shape[2]}
