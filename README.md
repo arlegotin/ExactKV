@@ -2,7 +2,7 @@
 
 ExactKV investigates whether an unchanged native MLX Q4 KV cache can also support bit-exact recovery of its original BF16 words through a compact conditional refinement stream. The experiment targets one M3 Max and reconstructs one layer at a time for verification.
 
-The specification and implementation plan are being executed gate by gate. G0 capability checks pass on the measured machine, with novelty explicitly provisional. Codec size and benchmark results remain to be measured. A justified early no-go is an intended research outcome.
+The specification and implementation plan were executed through the G1 size gate. G0 capability checks pass on the measured machine, with novelty explicitly provisional. The CPU codec reconstructed all measured BF16 pages exactly, but the fully counted three-domain G1 result did not leave a useful memory margin after exact staging. Later runtime and Metal-decoder gates are therefore not claimed.
 
 - [Design specification](docs/superpowers/specs/2026-09-28-exactkv-design.md): codec, page format, ownership, verification, baselines, gates, and completion criteria.
 - [Implementation plan](docs/superpowers/plans/2026-09-28-exactkv.md): 18 tasks with interfaces, tests, evidence requirements, and meaningful commits.
@@ -52,6 +52,12 @@ The CPU reference for the version-one interval-rank page format is implemented. 
 
 This is an E1 codec mechanism check, not yet an all-layer real-cache size result or a GPU decoder result.
 
-The independent size controls now include a page-local exact exponent palette, two separate field-split Zstd frames, and a predictor-bound XOR correction. The palette's compact header and raw fallback are fixed by a golden byte fixture; none of these CPU timings will be presented as a GPU-decoder speed comparison. `ByteLedger` counts aliases once and actual mirrors twice, while cache projections explicitly add staging and tail bytes.
+The independent size controls include a page-local exact exponent palette, two separate field-split Zstd frames, and a predictor-bound XOR correction. The palette's compact header and raw fallback are fixed by a golden byte fixture; CPU timings are not a GPU-decoder speed comparison. `ByteLedger` counts aliases once and actual mirrors twice, while cache projections explicitly add staging and tail bytes.
+
+The measured G1 prompt bytes for each 512-token development input were 56 MiB raw BF16 and 55.10–55.22 MiB for Q4 plus conditional refinement. With the declared 256-token tail and two exact layer stages, the projected cache requirement was 87.10–87.22 MiB for the conditional path versus 84 MiB for raw exact KV. The detailed per-layer/head and control-codec records are in `results/evidence/G1/size-512.json`. These are size measurements and projections from a diagnostic full-cache capture, not physical peak-memory or end-to-end runtime claims. To reproduce the costly three-prompt size probe deliberately:
+
+```bash
+.venv/bin/python -m kvrefine.cli probe --manifest data/manifest.jsonl --tokens 512 --out results/runs/g1-512
+```
 
 G0 measured an Apple M3 Max with 36 GiB RAM, ARM-native Python 3.12.9, MLX 0.32.2, and MLX-LM 0.31.3. The safe application budget, compressibility, and runtime utility remain to be measured. Work stays on the current branch.

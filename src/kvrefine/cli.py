@@ -21,6 +21,10 @@ def main(argv: list[str] | None = None) -> int:
     data.add_argument("--split", choices=("dev", "heldout"), required=True)
     data.add_argument("--tokens", type=int, default=512)
     data.add_argument("--out", type=Path, required=True)
+    probe = subcommands.add_parser("probe", help="Measure all-layer exact and native Q4 page sizes")
+    probe.add_argument("--manifest", type=Path, required=True)
+    probe.add_argument("--tokens", type=int, required=True)
+    probe.add_argument("--out", type=Path, required=True)
     try:
         args = parser.parse_args(argv)
     except SystemExit as exc:
@@ -40,6 +44,18 @@ def main(argv: list[str] | None = None) -> int:
         model = json.loads(Path("data/model-lock.json").read_text())
         records = build_manifest(sources, model, args.split, args.out, tokens=args.tokens)
         print(json.dumps({"out": str(args.out), "prompts": len(records), "split": args.split, "tokens": args.tokens}))
+        return 0
+    if args.command == "probe":
+        from .probe import run_probe
+
+        out = args.out if args.out.suffix == ".json" else args.out / "probe.json"
+        try:
+            result = run_probe(args.manifest, args.tokens)
+        except Exception as exc:
+            write_record(out, {"schema_version": 1, "kind": "g1-failure", "reason": str(exc), "error_type": type(exc).__name__})
+            raise
+        write_record(out, result)
+        print(json.dumps({"out": str(out), "prompts": len(result["prompts"]), "tokens": args.tokens}))
         return 0
     return 2
 

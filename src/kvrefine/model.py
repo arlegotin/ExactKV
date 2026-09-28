@@ -9,7 +9,7 @@ import re
 import shutil
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterator
 
 from .records import JsonDict
 
@@ -187,3 +187,32 @@ def smoke(handle: ModelHandle) -> JsonDict:
         "allocated_capacity_tokens": caches[0].keys.shape[2],
         "last_logit_finite": finite,
     }
+
+
+def capture_prompt(handle: ModelHandle, prompt: JsonDict) -> Iterator[tuple[int, Any, Any]]:
+    """Diagnostic whole-cache capture; it is not a final-system peak-memory path."""
+    import mlx.core as mx
+    from mlx_lm.models.cache import KVCache
+
+    ids = prompt["token_ids"]
+    if not ids or len(ids) > handle.identity["context_limit"] or len(ids) != prompt["tokens"]:
+        raise ModelIdentityError("prompt token extent is invalid for the pinned model")
+    caches = [KVCache() for _ in range(EXPECTED["num_hidden_layers"])]
+    hidden = handle.model.model(mx.array([ids], dtype=mx.int32), cache=caches)
+    mx.eval(hidden, *(entry for cache in caches for entry in (cache.keys, cache.values)))
+    del hidden
+    try:
+        for layer, cache in enumerate(caches):
+            keys, values = cache.state
+            expected_shape = (1, EXPECTED["num_key_value_heads"], len(ids), EXPECTED["head_dim"])
+            if keys.shape != expected_shape or values.shape != expected_shape:
+                raise ModelIdentityError(f"captured layer {layer} has unexpected K/V geometry")
+            if keys.dtype != mx.bfloat16 or values.dtype != mx.bfloat16:
+                raise ModelIdentityError(f"captured layer {layer} is not original BF16 K/V")
+            yield layer, keys, values
+            cache.keys = None
+            cache.values = None
+    finally:
+        for cache in caches:
+            cache.keys = None
+            cache.values = None
