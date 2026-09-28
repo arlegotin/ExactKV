@@ -27,6 +27,7 @@ def _stopped_results(tmp_path: Path) -> Path:
                 "raw_bytes": 56 * 1024**2, "q_bytes": 14 * 1024**2,
                 "scales_biases_bytes": int(1.75 * 1024**2), "refinement_bytes": 39 * 1024**2,
                 "refinement_payload_bytes": 38 * 1024**2, "metadata_bytes": 1 * 1024**2,
+                "refinement_page_bytes": 39 * 1024**2 - 4096, "container_metadata_bytes": 4096,
                 "palette_bytes": 44 * 1024**2, "field_zstd_bytes": 40 * 1024**2,
                 "xor_zstd_bytes": 41 * 1024**2, "shared_bytes": int(54.75 * 1024**2),
             }},
@@ -34,6 +35,14 @@ def _stopped_results(tmp_path: Path) -> Path:
                 "shared_two_stage": {"cache_peak_bytes": int(54.75 * mib) + 4 * mib + shared_tail},
                 "shared_one_stage": {"cache_peak_bytes": int(54.75 * mib) + 2 * mib + shared_tail},
                 "raw_exact": {"cache_peak_bytes": 84 * 1024**2},
+                "palette_dual_one_stage": {"cache_peak_bytes": int(59.75 * mib) + 2 * mib + shared_tail},
+                "palette_dual_two_stage": {"cache_peak_bytes": int(59.75 * mib) + 4 * mib + shared_tail},
+                "zstd_dual_one_stage": {"cache_peak_bytes": int(55.75 * mib) + 2 * mib + shared_tail},
+                "zstd_dual_two_stage": {"cache_peak_bytes": int(55.75 * mib) + 4 * mib + shared_tail},
+                "palette_exact_only_one_stage": {"cache_peak_bytes": 44 * mib + 2 * mib + 28 * mib},
+                "palette_exact_only_two_stage": {"cache_peak_bytes": 44 * mib + 4 * mib + 28 * mib},
+                "zstd_exact_only_one_stage": {"cache_peak_bytes": 40 * mib + 2 * mib + 28 * mib},
+                "zstd_exact_only_two_stage": {"cache_peak_bytes": 40 * mib + 4 * mib + 28 * mib},
             },
             "tail_reservation": {
                 "exact_authoritative_bytes": 28 * mib,
@@ -75,6 +84,19 @@ def test_projection_is_not_reported_as_measured_capacity(tmp_path):
     assert "verifier-candidate workspace" in report
 
 
+def test_independent_control_projections_and_ratios_are_visible(tmp_path):
+    from kvrefine.report import build_report
+
+    root = _stopped_results(tmp_path)
+    out = root / "report.md"
+    build_report(root, out)
+    report = out.read_text()
+    assert "Field-Zstd exact only" in report
+    assert "Q4 + field-Zstd" in report
+    assert "70.00" in report  # 40 MiB exact pages + 28 MiB tail + one 2 MiB stage
+    assert "ratio to raw exact" in report
+
+
 def test_narrative_byte_ranges_are_derived_from_evidence(tmp_path):
     from kvrefine.report import build_report
 
@@ -112,6 +134,23 @@ def test_report_refuses_changed_hashed_evidence(tmp_path):
     size = root / "evidence/G1/size-512.json"
     size.write_bytes(size.read_bytes() + b" ")
     with pytest.raises(ReportError, match="evidence"):
+        build_report(root, root / "report.md")
+
+
+def test_report_refuses_inconsistent_control_projection(tmp_path):
+    import json
+
+    from kvrefine.report import ReportError, build_report
+    from kvrefine.gates import write_decision
+    from kvrefine.records import write_record
+
+    root = _stopped_results(tmp_path)
+    size = root / "evidence/G1/size-512.json"
+    record = json.loads(size.read_text())
+    record["prompts"][0]["projections"]["zstd_exact_only_one_stage"]["cache_peak_bytes"] += 1
+    write_record(size, record)
+    write_decision("G1", "stop", [size, root / "decisions/G0.json"], "size no-go", ["report"], root / "decisions/G1.json")
+    with pytest.raises(ReportError, match="control projection"):
         build_report(root, root / "report.md")
 
 

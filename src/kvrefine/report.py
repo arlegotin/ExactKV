@@ -23,7 +23,7 @@ def _mib(value: int) -> str:
 
 def _range_mib(values: list[int]) -> str:
     low, high = min(values), max(values)
-    return _mib(low) if low == high else f"{_mib(low)}–{_mib(high)}"
+    return _mib(low) if _mib(low) == _mib(high) else f"{_mib(low)}–{_mib(high)}"
 
 
 def _sha256(path: Path) -> str:
@@ -93,9 +93,17 @@ def build_report(results_root: Path, out: Path) -> JsonDict:
             raise ReportError(f"incomplete or inconsistent byte accounting for {row.get('prompt_id')}")
         if totals["refinement_bytes"] != totals["refinement_payload_bytes"] + totals["metadata_bytes"]:
             raise ReportError("refinement payload and metadata do not add to serialized extent")
+        if totals["refinement_bytes"] != totals["refinement_page_bytes"] + totals["container_metadata_bytes"] or totals["container_metadata_bytes"] <= 0:
+            raise ReportError("tensor container is missing from conditional size accounting")
         if summary["pages"] * 4096 != summary["values"]:
             raise ReportError("page and captured-value totals disagree")
         total_pages += summary["pages"]
+        control_projections = {}
+        for name in ("palette_dual", "zstd_dual", "palette_exact_only", "zstd_exact_only"):
+            control_projections[name] = {}
+            for stage_label in ("one_stage", "two_stage"):
+                key = f"{name}_{stage_label}"
+                control_projections[name][stage_label] = row["projections"][key]["cache_peak_bytes"]
         measured.append({
             "prompt_id": row["prompt_id"],
             "tokens": row["tokens"],
@@ -104,6 +112,7 @@ def build_report(results_root: Path, out: Path) -> JsonDict:
             "scales_biases_bytes": totals["scales_biases_bytes"],
             "refinement_bytes": totals["refinement_bytes"],
             "metadata_bytes": totals["metadata_bytes"],
+            "container_metadata_bytes": totals["container_metadata_bytes"],
             "shared_bytes": shared,
             "palette_dual_bytes": totals["q_bytes"] + totals["scales_biases_bytes"] + totals["palette_bytes"],
             "zstd_dual_bytes": totals["q_bytes"] + totals["scales_biases_bytes"] + totals["field_zstd_bytes"],
@@ -113,6 +122,7 @@ def build_report(results_root: Path, out: Path) -> JsonDict:
             "shared_two_stage_projected_bytes": row["projections"]["shared_two_stage"]["cache_peak_bytes"],
             "raw_exact_projected_bytes": row["projections"]["raw_exact"]["cache_peak_bytes"],
             "tail_reservation": row["tail_reservation"],
+            "control_projections": control_projections,
             "pages": summary["pages"],
         })
     if any(item["shared_one_stage_projected_bytes"] <= item["raw_exact_projected_bytes"] for item in measured):
@@ -131,6 +141,16 @@ def build_report(results_root: Path, out: Path) -> JsonDict:
         for item, tail, shared_tail, first, second in zip(measured, raw_tails, shared_tails, stage_one, stage_two)
     ):
         raise ReportError("stage/tail projections do not match the declared one/two-stage schedule")
+    for item, shared_tail, raw_tail, one_stage, two_stages in zip(measured, shared_tails, raw_tails, stage_one, stage_two):
+        for name, base, tail in (
+            ("palette_dual", item["palette_dual_bytes"], shared_tail),
+            ("zstd_dual", item["zstd_dual_bytes"], shared_tail),
+            ("palette_exact_only", item["palette_exact_only_bytes"], raw_tail),
+            ("zstd_exact_only", item["zstd_exact_only_bytes"], raw_tail),
+        ):
+            projection = item["control_projections"][name]
+            if projection["one_stage"] != base + tail + one_stage or projection["two_stage"] != base + tail + two_stages:
+                raise ReportError(f"control projection does not match measured page bytes: {name}")
     prompt_count = len(measured)
     prompt_noun = "prompt" if prompt_count == 1 else "prompts"
     raw_range = _range_mib([item["raw_bytes"] for item in measured])
@@ -159,7 +179,7 @@ def build_report(results_root: Path, out: Path) -> JsonDict:
         "",
         f"E1 passed in the CPU reference: {total_pages:,} real 4,096-value pages across all 28 layers, 8 KV heads, both K and V, and the listed development prompts. The conditional codec, independent palette, field-split Zstd, and XOR control each decoded to the original uint16 BF16 words on every page. Synthetic tests also exercise every 16-bit BF16 pattern. E2 paired-verifier equality was not tested. E3 stock greedy equivalence was not tested.",
         "",
-        "All numbers in the next table are measured serialized prompt MiB. Q4 includes both packed codes and native BF16 scales/biases; conditional bytes include literal groups, page headers, modes, offsets, alignment, and guards. Independent exact-only columns intentionally omit Q4.",
+        "All numbers in the next table are measured prompt MiB. Q4 includes both packed codes and native BF16 scales/biases. Conditional bytes are the complete version-one EKVT serialization: literal groups, EKVR page headers, modes, restart offsets, alignment, guards, and the tensor-container header, manifest, source-side hash, tensor descriptors, and page-offset index. Independent controls are measured page-local code streams; their tensor indexes are excluded, so their figures are lower bounds. Independent exact-only columns intentionally omit Q4.",
         "",
         "| Development prompt | Raw BF16 | Q4 codes + S/B | Q4 + conditional | Q4 + palette | Q4 + field-Zstd | Palette only | Field-Zstd only |",
         "|---|---:|---:|---:|---:|---:|---:|---:|",
@@ -171,7 +191,7 @@ def build_report(results_root: Path, out: Path) -> JsonDict:
         )
     lines += [
         "",
-        "The page-local field-Zstd control is a CPU size comparator; it has no GPU decoder or fair inference runtime result. The simple palette is likewise a local baseline, not a reproduction of SplitZip.",
+        f"The EKVT container contributes {_range_mib([item['container_metadata_bytes'] for item in measured])} MiB per prompt. The page-local field-Zstd control is a CPU size comparator; it has no GPU decoder or fair inference runtime result. The simple palette is likewise a local baseline, not a reproduction of SplitZip.",
         "",
         "## Projected working bytes and decision",
         "",
@@ -186,7 +206,26 @@ def build_report(results_root: Path, out: Path) -> JsonDict:
         )
     lines += [
         "",
-        f"Across {prompt_count} development {prompt_noun}, Q4 plus conditional refinement occupied {shared_range} MiB of the {raw_range} MiB raw prompt. The mandatory exact stage exceeded the {saving_range} MiB prompt saving even in an optimistic projection that omitted native draft and candidate tails: {_range_mib(optimistic_one)} MiB against {_range_mib([item['raw_exact_projected_bytes'] for item in measured])} MiB raw exact. Removing every refinement metadata byte ({metadata_range} MiB per prompt) from that optimistic case would leave at most {_mib(hypothetical_headroom)} MiB one-stage headroom" + (" and would still lose with two stages." if hypothetical_two_still_loses else "; the two-stage counterfactual is unresolved.") + " The specified-buffer projection is worse still. The proposed page-local format therefore has no credible measured memory advantage worth building a Metal decoder for. A longer context or different model may have different statistics; none was measured after this stop.",
+        "The table below applies the same one/two-stage and tail schedules to independent controls. Its controls omit a tensor-level index, making their bytes optimistic lower bounds. The exact-only controls have no native Q4 tail, but would need to decode for ordinary exact attention; that runtime was not measured. Ratios use the raw exact-plus-tail bytes for the same prompt.",
+        "",
+        "| Development prompt | Representation | One stage MiB | Two stages MiB | One-stage ratio to raw exact | Two-stage ratio to raw exact |",
+        "|---|---|---:|---:|---:|---:|",
+    ]
+    control_names = (
+        ("palette_dual", "Q4 + palette"),
+        ("zstd_dual", "Q4 + field-Zstd"),
+        ("palette_exact_only", "Palette exact only"),
+        ("zstd_exact_only", "Field-Zstd exact only"),
+    )
+    for item in measured:
+        raw = item["raw_exact_projected_bytes"]
+        for key, label in control_names:
+            one = item["control_projections"][key]["one_stage"]
+            two = item["control_projections"][key]["two_stage"]
+            lines.append(f"| {item['prompt_id']} | {label} | {_mib(one)} | {_mib(two)} | {one / raw:.2f}× | {two / raw:.2f}× |")
+    lines += [
+        "",
+        f"Across {prompt_count} development {prompt_noun}, Q4 plus conditional refinement occupied {shared_range} MiB of the {raw_range} MiB raw prompt. The mandatory exact stage exceeded the {saving_range} MiB prompt saving even in an optimistic projection that omitted native draft and candidate tails: {_range_mib(optimistic_one)} MiB against {_range_mib([item['raw_exact_projected_bytes'] for item in measured])} MiB raw exact. Removing every refinement metadata byte ({metadata_range} MiB per prompt) from that optimistic case would leave at most {_mib(hypothetical_headroom)} MiB one-stage headroom" + (" and would still lose with two stages." if hypothetical_two_still_loses else "; the two-stage counterfactual is unresolved.") + " The specified-buffer projection is worse still. The proposed conditional format therefore has no credible measured memory advantage worth building a Metal decoder for. A longer context or different model may have different statistics; none was measured after this stop.",
         "",
         *physical_observation_lines({}),
         "",
