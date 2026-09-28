@@ -52,4 +52,6 @@ The CPU reference for the version-one interval-rank page format is implemented. 
 
 This is an E1 codec mechanism check, not yet an all-layer real-cache size result or a GPU decoder result.
 
+The independent size controls now include a page-local exact exponent palette, two separate field-split Zstd frames, and a predictor-bound XOR correction. The palette's compact header and raw fallback are fixed by a golden byte fixture; none of these CPU timings will be presented as a GPU-decoder speed comparison. `ByteLedger` counts aliases once and actual mirrors twice, while cache projections explicitly add staging and tail bytes.
+
 G0 measured an Apple M3 Max with 36 GiB RAM, ARM-native Python 3.12.9, MLX 0.32.2, and MLX-LM 0.31.3. The safe application budget, compressibility, and runtime utility remain to be measured. Work stays on the current branch.
