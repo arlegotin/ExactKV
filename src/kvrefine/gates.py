@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import subprocess
 from pathlib import Path
 
@@ -47,7 +48,7 @@ def write_decision(
     for path in evidence:
         if not path.is_file():
             raise GateError(f"missing evidence: {path}")
-        records.append({"path": str(path.resolve()), "sha256": _sha256(path)})
+        records.append({"path": os.path.relpath(path.resolve(), out.parent.resolve()), "sha256": _sha256(path)})
     record: JsonDict = {
         "schema_version": 1,
         "kind": "gate",
@@ -73,7 +74,7 @@ def require_gate(name: str, decisions_dir: Path) -> JsonDict:
     if record["name"] != name:
         raise GateError(f"gate identity mismatch: expected {name}")
     for item in record["evidence"]:
-        evidence_path = Path(item["path"])
+        evidence_path = path.parent / item["path"]
         if not evidence_path.is_file() or _sha256(evidence_path) != item["sha256"]:
             raise GateError(f"gate evidence missing or changed: {evidence_path}")
     if record["status"] not in {"pass", "narrow"}:
