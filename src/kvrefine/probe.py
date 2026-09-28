@@ -20,7 +20,7 @@ from .baselines import (
 from .codec import _bounds, decode_page, encode_page
 from .data import load_prompts
 from .format import PAGE_HEADER
-from .metrics import cache_projection, kv_payload_bytes
+from .metrics import cache_projection, kv_payload_bytes, tail_reservation
 from .model import capture_prompt, load_model
 from .native import NativePage, bf16_words, quantize_kv
 from .records import JsonDict
@@ -209,14 +209,16 @@ def run_probe(manifest: Path, tokens: int) -> JsonDict:
             raise ProbeError(f"all-layer capture incomplete for {prompt['prompt_id']}")
         totals = summary["totals"]
         layer_bytes = expected_raw // 28
-        tail_bytes = kv_payload_bytes(256)
+        reservation = tail_reservation(tokens, output_tokens=256, verifier_workspace_tokens=9)
+        shared_tail = reservation["shared_tail_bytes"]
+        raw_tail = reservation["raw_exact_tail_bytes"]
         projections = {
-            "shared_one_stage": cache_projection({"q_codes": totals["q_bytes"], "scales_biases": totals["scales_biases_bytes"], "refinement": totals["refinement_payload_bytes"], "metadata": totals["metadata_bytes"]}, layer_bytes, tail_bytes, 1),
-            "shared_two_stage": cache_projection({"q_codes": totals["q_bytes"], "scales_biases": totals["scales_biases_bytes"], "refinement": totals["refinement_payload_bytes"], "metadata": totals["metadata_bytes"]}, layer_bytes, tail_bytes, 2),
-            "palette_dual_two_stage": cache_projection({"q_codes": totals["q_bytes"], "scales_biases": totals["scales_biases_bytes"], "independent_exact": totals["palette_bytes"]}, layer_bytes, tail_bytes, 2),
-            "zstd_dual_two_stage": cache_projection({"q_codes": totals["q_bytes"], "scales_biases": totals["scales_biases_bytes"], "independent_exact": totals["field_zstd_bytes"]}, layer_bytes, tail_bytes, 2),
-            "palette_exact_only_two_stage": cache_projection({"independent_exact": totals["palette_bytes"]}, layer_bytes, tail_bytes, 2),
-            "raw_exact": cache_projection({"raw_bf16": expected_raw}, 0, tail_bytes, 0),
+            "shared_one_stage": cache_projection({"q_codes": totals["q_bytes"], "scales_biases": totals["scales_biases_bytes"], "refinement": totals["refinement_payload_bytes"], "metadata": totals["metadata_bytes"]}, layer_bytes, shared_tail, 1),
+            "shared_two_stage": cache_projection({"q_codes": totals["q_bytes"], "scales_biases": totals["scales_biases_bytes"], "refinement": totals["refinement_payload_bytes"], "metadata": totals["metadata_bytes"]}, layer_bytes, shared_tail, 2),
+            "palette_dual_two_stage": cache_projection({"q_codes": totals["q_bytes"], "scales_biases": totals["scales_biases_bytes"], "independent_exact": totals["palette_bytes"]}, layer_bytes, shared_tail, 2),
+            "zstd_dual_two_stage": cache_projection({"q_codes": totals["q_bytes"], "scales_biases": totals["scales_biases_bytes"], "independent_exact": totals["field_zstd_bytes"]}, layer_bytes, shared_tail, 2),
+            "palette_exact_only_two_stage": cache_projection({"independent_exact": totals["palette_bytes"]}, layer_bytes, raw_tail, 2),
+            "raw_exact": cache_projection({"raw_bf16": expected_raw}, 0, raw_tail, 0),
         }
-        results.append({"prompt_id": prompt["prompt_id"], "prompt_sha256": prompt["token_sha256"], "tokens": tokens, "summary": summary, "allocation": allocation, "projections": projections})
+        results.append({"prompt_id": prompt["prompt_id"], "prompt_sha256": prompt["token_sha256"], "tokens": tokens, "summary": summary, "allocation": allocation, "tail_reservation": reservation, "projections": projections})
     return {"schema_version": 1, "kind": "g1-probe", "model_revision": lock["revision"], "diagnostic_full_raw_cache": True, "prompts": results}

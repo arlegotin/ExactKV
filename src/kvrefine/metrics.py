@@ -13,6 +13,26 @@ def kv_payload_bytes(tokens: int, layers: int = 28, kv_heads: int = 8, head_dim:
     return 2 * layers * kv_heads * tokens * head_dim * 2
 
 
+def tail_reservation(prompt_tokens: int, output_tokens: int = 256, verifier_workspace_tokens: int = 9) -> JsonDict:
+    """Conservative batch-one capacity for the specified BF16 and native Q4 tails."""
+    if min(prompt_tokens, output_tokens, verifier_workspace_tokens) < 0:
+        raise ValueError("prompt, output and verifier workspace lengths must be nonnegative")
+    step = 256  # installed QuantizedKVCache growth, asserted by G0's native ABI
+    round_step = lambda count: (count + step - 1) // step * step
+    extra_native_tokens = round_step(prompt_tokens + output_tokens + verifier_workspace_tokens) - round_step(prompt_tokens)
+    exact_authoritative = kv_payload_bytes(output_tokens)
+    exact_candidates = kv_payload_bytes(verifier_workspace_tokens)
+    native_draft = kv_payload_bytes(extra_native_tokens) * 36 // 128  # Q4 codes + BF16 S/B per 64 values
+    return {
+        "exact_authoritative_bytes": exact_authoritative,
+        "exact_candidate_bytes": exact_candidates,
+        "native_extra_capacity_tokens": extra_native_tokens,
+        "native_draft_bytes": native_draft,
+        "shared_tail_bytes": exact_authoritative + exact_candidates + native_draft,
+        "raw_exact_tail_bytes": exact_authoritative,
+    }
+
+
 @dataclass(slots=True)
 class ByteLedger:
     _owners: dict[str, JsonDict] = field(default_factory=dict)

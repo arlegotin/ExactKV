@@ -33,3 +33,16 @@ def test_cache_projection_includes_stage_tail_and_metadata():
     )
     assert projection["prompt_plus_stages_bytes"] == 1528 * mib
     assert projection["cache_peak_bytes"] == 1556 * mib
+
+
+def test_shared_tail_reservation_charges_native_capacity_and_candidates():
+    from kvrefine.metrics import kv_payload_bytes, tail_reservation
+
+    reserve = tail_reservation(prompt_tokens=512, output_tokens=256, verifier_workspace_tokens=9)
+    assert reserve["exact_authoritative_bytes"] == kv_payload_bytes(256)
+    assert reserve["exact_candidate_bytes"] == kv_payload_bytes(9)
+    assert reserve["native_extra_capacity_tokens"] == 512
+    assert reserve["native_draft_bytes"] == kv_payload_bytes(512) * 36 // 128
+    assert reserve["shared_tail_bytes"] == sum(
+        reserve[key] for key in ("exact_authoritative_bytes", "exact_candidate_bytes", "native_draft_bytes")
+    )

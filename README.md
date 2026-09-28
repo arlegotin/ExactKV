@@ -12,27 +12,32 @@ Run the current small suite in an ARM-native Python 3.12 environment:
 
 ```bash
 python3.12 -m venv .venv
-.venv/bin/python -m pip install -e '.[test]'
 .venv/bin/python -m pip install -r requirements-lock.txt
-.venv/bin/python -m kvrefine.cli doctor --out results/environment.json
+.venv/bin/python -m kvrefine.cli doctor --out results/runs/doctor/environment.json
 .venv/bin/python -m pytest -q
-.venv/bin/python -m kvrefine.cli doctor --smoke --out results/environment.json
+.venv/bin/python -m kvrefine.cli doctor --smoke --out results/runs/doctor/environment-smoke.json
 .venv/bin/python -m pytest --run-metal -m 'not model and not slow' -q
 ```
 
-`doctor` exits with code 4 when a critical measurement is unavailable; its JSON still records the reason. The smoke and native tests require Metal access. The original BF16 model is pinned in `data/model-lock.json`; model weights are downloaded locally and deliberately ignored by Git. To re-resolve the official checkpoint in a fresh checkout, run:
+`doctor` exits with code 4 when a critical measurement is unavailable; its JSON still records the reason. Write new observations under ignored `results/runs/` so the committed G0 evidence hash remains valid. The smoke and native tests require Metal access. The original BF16 model is pinned in `data/model-lock.json`; model weights are downloaded locally and deliberately ignored by Git. To fetch that **exact** checkpoint in a fresh checkout, run:
 
 ```bash
 .venv/bin/python - <<'PY'
+import json
 from pathlib import Path
-from kvrefine.model import resolve_snapshot
-from kvrefine.records import write_record
-write_record(Path('data/model-lock.json'), resolve_snapshot('Qwen/Qwen3-0.6B'))
+from shutil import disk_usage
+from huggingface_hub import snapshot_download
+from kvrefine.model import SNAPSHOT_PATTERNS, load_model
+lock = json.loads(Path('data/model-lock.json').read_text())
+if disk_usage('.').free < 3 * 1024**3:
+    raise SystemExit('need at least 3 GiB free before downloading the checkpoint')
+snapshot_download(lock['model_id'], revision=lock['revision'], local_dir=lock['local_dir'], allow_patterns=list(SNAPSHOT_PATTERNS))
+load_model(lock)  # validates all pinned file hashes and original BF16 weights
 PY
 .venv/bin/python -m pytest tests/test_model_identity.py --run-model -m model -q
 ```
 
-Check the newly resolved revision before replacing a committed lock: a changed upstream checkpoint is a new experimental configuration. The model test checks hashes, original BF16 weights, post-RoPE cache dtype, and valid K/V geometry. The other commands in the plan will appear as their gates are implemented; Metal decoding and held-out benchmarks depend on earlier gate results.
+The model test checks hashes, original BF16 weights, post-RoPE cache dtype, and valid K/V geometry. A changed upstream checkpoint is a new experimental configuration; do not rewrite the committed lock when reproducing this result.
 
 The first G1 input manifest uses immutable source revisions in `data/sources.json`. Building it downloads only the pinned WikiText parquet splits and selected CPython source files, verifies their hashes, and writes exact token IDs under ignored `artifacts/`. It does not execute source code or run model inference:
 
@@ -50,14 +55,20 @@ The CPU reference for the version-one interval-rank page format is implemented. 
 .venv/bin/python -m pytest tests/test_bits.py tests/test_codec.py tests/test_format.py -q
 ```
 
-This is an E1 codec mechanism check, not yet an all-layer real-cache size result or a GPU decoder result.
+This is the E1 CPU mechanism check; `test_literal_preserves_every_special_bf16_word` is an explicit fallback/edge case. The real-cache size probe below adds all-layer evidence. No GPU decoder was built after G1 stopped.
 
 The independent size controls include a page-local exact exponent palette, two separate field-split Zstd frames, and a predictor-bound XOR correction. The palette's compact header and raw fallback are fixed by a golden byte fixture; CPU timings are not a GPU-decoder speed comparison. `ByteLedger` counts aliases once and actual mirrors twice, while cache projections explicitly add staging and tail bytes.
 
-The measured G1 prompt bytes for each 512-token development input were 56 MiB raw BF16 and 55.10–55.22 MiB for Q4 plus conditional refinement. With the declared 256-token tail and two exact layer stages, the projected cache requirement was 87.10–87.22 MiB for the conditional path versus 84 MiB for raw exact KV. The detailed per-layer/head and control-codec records are in `results/evidence/G1/size-512.json`. These are size measurements and projections from a diagnostic full-cache capture, not physical peak-memory or end-to-end runtime claims. To reproduce the costly three-prompt size probe deliberately:
+The measured G1 prompt bytes for each 512-token development input were 56 MiB raw BF16 and 55.10–55.22 MiB for Q4 plus conditional refinement. Adding one or two exact layer stages, the authoritative 256-token BF16 tail, nine verifier-candidate positions, and the native Q4 tail's 256-token-step allocation yields **101.83–101.95 MiB** with one stage or **103.83–103.95 MiB** with two, versus **84 MiB** for raw exact KV plus its authoritative tail. The detailed per-layer/head and control-codec records are in `results/evidence/G1/size-512.json`. These are size measurements and working-capacity projections from a diagnostic full-cache capture, not physical process peaks or end-to-end runtime claims. To reproduce the costly three-prompt size probe deliberately:
 
 ```bash
 .venv/bin/python -m kvrefine.cli probe --manifest data/manifest.jsonl --tokens 512 --out results/runs/g1-512
 ```
 
-G0 measured an Apple M3 Max with 36 GiB RAM, ARM-native Python 3.12.9, MLX 0.32.2, and MLX-LM 0.31.3. The safe application budget, compressibility, and runtime utility remain to be measured. Work stays on the current branch.
+Regenerate the findings report without touching pinned evidence:
+
+```bash
+.venv/bin/python -m kvrefine.cli report --results results --out results/report.md
+```
+
+G0 measured an Apple M3 Max with 36 GiB RAM, ARM-native Python 3.12.9, MLX 0.32.2, and MLX-LM 0.31.3. The G1 no-go is a serialized-size and working-byte projection result; a safe application budget, actual physical peak, verified output behavior, and runtime utility were not measured because the size gate stopped the work. Work stayed on the current branch.
