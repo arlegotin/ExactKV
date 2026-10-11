@@ -7,6 +7,8 @@ name = "exact-kv-refinement-poc"
 version = "0.1.0"
 description = "A gated experiment in exact refinement of native quantized KV cache"
 readme = "README.md"
+license = {text = "AGPL-3.0-only"}
+authors = [{name = "Artem Legotin"}]
 requires-python = ">=3.12,<3.13"
 dependencies = [
     "numpy>=2.0",
@@ -30,3 +32,10 @@ markers = [
     "slow: long-context or repeated benchmark",
 ]
 addopts = "-m 'not metal and not model and not slow'"
+
+[project.urls]
+Repository = "https://github.com/arlegotin/ExactKV"
+Issues = "https://github.com/arlegotin/ExactKV/issues"
+
+[tool.setuptools]
+license-files = ["LICENSE", "NOTICE", "LICENSING.md", "LICENSES/*.txt", "THIRD_PARTY_NOTICES.md"]

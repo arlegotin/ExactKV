@@ -1,0 +1,26 @@
+cff-version: 1.2.0
+message: "If you build on this software, findings, or ideas, please cite this repository and the exact commit used."
+type: software
+title: "ExactKV: Exact refinement of a native quantized KV cache"
+authors:
+  - family-names: Legotin
+    given-names: Artem
+version: 0.1.0
+license:
+  - AGPL-3.0-only
+  - CC-BY-4.0
+repository-code: "https://github.com/arlegotin/ExactKV"
+url: "https://github.com/arlegotin/ExactKV"
+abstract: >-
+  A CPU codec that recovers original BF16 cache words from native 4-bit codes
+  and refinement data. Exact reconstruction passed on 21,504 real cache pages
+  from three Qwen3-0.6B development prompts, but fully counted storage savings
+  did not cover projected working buffers. The experiment stopped before GPU
+  decoding, integrated verification, or physical-memory measurements.
+keywords:
+  - language models
+  - KV cache
+  - lossless compression
+  - BF16
+  - quantization
+  - negative results
